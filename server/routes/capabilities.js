@@ -12,9 +12,12 @@
  */
 import { Router }        from 'express';
 import { networkInterfaces, cpus, freemem, uptime, hostname } from 'node:os';
+import { execFile }      from 'node:child_process';
+import { promisify }     from 'node:util';
 import { PORT }          from '../server.js';
 
 export const router = Router();
+const execFileAsync = promisify(execFile);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,16 +46,45 @@ function cpuLoad() {
         return dTotal === 0 ? 0 : (dTotal - dIdle) / dTotal;
       });
       const avg = loads.reduce((a, b) => a + b, 0) / loads.length;
-      resolve(Math.round(avg * 1000) / 1000);    // 3 decimal places
+      resolve(Math.round(avg * 1000) / 1000);
     }, 100);
   });
+}
+
+/**
+ * Probe NVIDIA GPU via nvidia-smi.
+ * Returns { available: bool, name: string|null, memoryFreeMB: int|null, utilization: float|null }
+ */
+async function probeGpu() {
+  // Allow explicit override
+  const override = process.env.GPU_OVERRIDE;
+  if (override === 'none') return { available: false, name: null, memoryFreeMB: null, utilization: null };
+  if (override === 'available') return { available: true, name: 'override', memoryFreeMB: null, utilization: null };
+
+  try {
+    // Query: name, memory.free (MiB), utilization.gpu (%)
+    const { stdout } = await execFileAsync('nvidia-smi', [
+      '--query-gpu=name,memory.free,utilization.gpu',
+      '--format=csv,noheader,nounits',
+    ], { timeout: 3000 });
+
+    const [name, memFree, util] = stdout.trim().split(',').map(s => s.trim());
+    return {
+      available:     true,
+      name:          name  || null,
+      memoryFreeMB:  memFree ? parseInt(memFree) : null,
+      utilization:   util    ? Math.round(parseFloat(util)) / 100 : null,
+    };
+  } catch {
+    return { available: false, name: null, memoryFreeMB: null, utilization: null };
+  }
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 
 router.get('/', async (_req, res, next) => {
   try {
-    const load = await cpuLoad();
+    const [load, gpu] = await Promise.all([cpuLoad(), probeGpu()]);
 
     res.json({
       device:  process.env.DEVICE_ID ?? 'jumpnet',
@@ -61,7 +93,10 @@ router.get('/', async (_req, res, next) => {
       sensors: (process.env.DEVICE_SENSORS ?? '').split(',').map(s => s.trim()).filter(Boolean),
       compute: {
         cpuLoad:       load,
-        gpu:           'none',
+        gpu:           gpu.available ? 'available' : 'none',
+        gpuName:       gpu.name          ?? undefined,
+        gpuMemFreeMB:  gpu.memoryFreeMB  ?? undefined,
+        gpuUtil:       gpu.utilization   ?? undefined,
         memoryFreeMB:  Math.floor(freemem() / (1024 * 1024)),
         uptimeSeconds: Math.floor(uptime()),
       },

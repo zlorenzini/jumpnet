@@ -1,0 +1,11 @@
+{
+  "labels": [],
+  "classes": [],
+  "numClasses": 0,
+  "imageSize": 224,
+  "architecture": "mobilenet_v2",
+  "trainedAt": null,
+  "epochs": 0,
+  "accuracy": null,
+  "device": null
+}

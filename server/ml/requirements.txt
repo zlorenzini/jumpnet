@@ -1,0 +1,14 @@
+# Python dependencies for JumpNet ML (train.py + infer.py)
+#
+# PyTorch + Torchvision for 1660Ti (CUDA 12.1):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# For CUDA 11.8:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# CPU-only (no GPU):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+torch>=2.1.0
+torchvision>=0.16.0
+Pillow>=10.0.0

@@ -3,3 +3,8 @@ data/
 *.log
 .DS_Store
 Thumbs.db
+
+# Trained model weights (large binary — regenerated via POST /train)
+models/current/model.pth
+__pycache__/
+*.pyc

@@ -1,5 +1,6 @@
 import express      from 'express';
 import { router as inferRouter        } from './routes/infer.js';
+import { router as trainRouter        } from './routes/train.js';
 import { router as embedRouter        } from './routes/embed.js';
 import { router as datasetRouter      } from './routes/dataset.js';
 import { router as composeRouter      } from './routes/compose.js';
@@ -23,6 +24,7 @@ app.use((req, _res, next) => {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/infer',        inferRouter);
+app.use('/train',        trainRouter);
 app.use('/embed',        embedRouter);
 app.use('/dataset',      datasetRouter);
 app.use('/compose',      composeRouter);
