@@ -1,0 +1,8 @@
+{
+  "name": "jumpnet-client",
+  "version": "0.1.0",
+  "description": "JumpNet Node.js client",
+  "main": "index.js",
+  "type": "module",
+  "engines": { "node": ">=20" }
+}

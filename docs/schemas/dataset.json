@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://jumpnet/schemas/dataset.json",
+  "title": "DatasetUploadFields",
+  "description": "multipart/form-data fields for POST /dataset/upload.",
+  "type": "object",
+  "required": ["file", "dataset", "label"],
+  "additionalProperties": false,
+  "properties": {
+    "file": {
+      "type": "string",
+      "format": "binary",
+      "description": "Image file (JPEG, PNG, or WebP). Max 20 MB."
+    },
+    "dataset": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[\\w\\-]+$",
+      "description": "Dataset name. Created automatically if it does not exist."
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[\\w\\-]+$",
+      "description": "Class label for the image."
+    }
+  },
+  "examples": [
+    { "dataset": "beads-2024", "label": "red-round", "file": "<binary>" }
+  ]
+}

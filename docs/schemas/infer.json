@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://jumpnet/schemas/infer.json",
+  "title": "InferRequest",
+  "description": "Request body for POST /infer (JSON variant). Use multipart/form-data to send image files directly.",
+  "type": "object",
+  "required": ["image"],
+  "additionalProperties": false,
+  "properties": {
+    "image": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "contentMediaType": "image/jpeg",
+      "description": "Base64-encoded image (JPEG, PNG, or WebP)."
+    },
+    "bundleId": {
+      "type": "string",
+      "description": "ID of the model bundle to use. Auto-selects first available bundle if omitted."
+    },
+    "task": {
+      "type": "string",
+      "default": "classify",
+      "description": "Inference task hint passed to the bundle registry for auto-selection."
+    }
+  },
+  "examples": [
+    {
+      "image": "<base64-encoded-jpeg>",
+      "bundleId": "abc12345-0000-0000-0000-000000000000"
+    }
+  ]
+}

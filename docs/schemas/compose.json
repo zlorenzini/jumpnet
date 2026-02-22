@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://jumpnet/schemas/compose.json",
+  "title": "ComposeRequest",
+  "description": "Request body for POST /compose.",
+  "type": "object",
+  "required": ["image", "pipeline"],
+  "additionalProperties": false,
+  "properties": {
+    "image": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "contentMediaType": "image/jpeg",
+      "description": "Base64-encoded input image shared across all pipeline steps."
+    },
+    "pipeline": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "description": "Ordered list of inference steps to execute sequentially.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bundleId": {
+            "type": "string",
+            "description": "Model bundle to use for this step. Auto-selects if omitted."
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "image": "<base64>",
+      "pipeline": [
+        { "bundleId": "bundle-stage1" },
+        { "bundleId": "bundle-stage2" }
+      ]
+    }
+  ]
+}

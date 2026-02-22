@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://jumpnet/schemas/imprint.json",
+  "title": "ImprintRequest",
+  "description": "Request body for POST /imprint (starts a fine-tuning job).",
+  "type": "object",
+  "required": ["dataset"],
+  "additionalProperties": false,
+  "properties": {
+    "dataset": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the dataset to train on."
+    },
+    "epochs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500,
+      "default": 10,
+      "description": "Number of training epochs."
+    },
+    "learningRate": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "default": 0.001,
+      "description": "Optimizer learning rate."
+    }
+  },
+  "examples": [
+    { "dataset": "beads-2024", "epochs": 20, "learningRate": 0.001 }
+  ]
+}
