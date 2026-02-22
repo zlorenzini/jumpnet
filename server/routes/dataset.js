@@ -1,63 +1,79 @@
 /**
- * /dataset  — proxies all dataset operations to JumpSmartsRuntime.
+ * /dataset  — local-first dataset management.
  *
- *   GET  /dataset/list
- *   GET  /dataset/:name
- *   POST /dataset/upload          (multipart: file, dataset, label)
+ * All reads/writes go to DATA_DIR/datasets/ (see localDatastore.js).
+ * No upstream dependency required.
+ *
+ *   GET    /dataset/list
+ *   GET    /dataset/:name
+ *   POST   /dataset/upload          multipart (file, dataset, label) OR JSON ({ image: base64, dataset, label })
  *   DELETE /dataset/:name/:label/:filename
- *   GET  /dataset/:name/image/:label/:filename
+ *   GET    /dataset/:name/image/:label/:filename
  */
-import { Router } from 'express';
-import multer     from 'multer';
-import { UPSTREAM } from '../server.js';
+import { Router }    from 'express';
+import multer        from 'multer';
+import { extname }   from 'node:path';
+import {
+  saveImage,
+  listDatasets,
+  getDataset,
+  deleteImage,
+  getImagePath,
+  createReadStream,
+} from '../localDatastore.js';
 
 export const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
+// Mime → extension map for base64 uploads
+const MIME_EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+
 // ── GET /dataset/list ─────────────────────────────────────────────────────────
 router.get('/list', async (_req, res, next) => {
   try {
-    const r = await fetch(`${UPSTREAM}/dataset/list`);
-    res.status(r.status).json(await r.json());
+    res.json(await listDatasets());
   } catch (err) { next(err); }
 });
 
 // ── GET /dataset/:name ────────────────────────────────────────────────────────
 router.get('/:name', async (req, res, next) => {
   try {
-    const r = await fetch(`${UPSTREAM}/dataset/${encodeURIComponent(req.params.name)}`);
-    res.status(r.status).json(await r.json());
+    const data = await getDataset(req.params.name);
+    data ? res.json(data) : res.status(404).json({ error: 'Dataset not found.' });
   } catch (err) { next(err); }
 });
 
 // ── POST /dataset/upload ──────────────────────────────────────────────────────
+// Accepts multipart/form-data  (fields: file, dataset, label)
+//      OR application/json     (fields: image[base64], dataset, label)
 router.post('/upload', upload.single('file'), async (req, res, next) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Multipart field "file" is required.' });
-    const { dataset, label } = req.body;
-    if (!dataset || !label) return res.status(400).json({ error: '"dataset" and "label" fields are required.' });
+    const dataset = (req.body?.dataset ?? '').trim();
+    const label   = (req.body?.label   ?? '').trim();
 
-    const boundary = `----JumpNetBoundary${Date.now()}`;
-    const CRLF = '\r\n';
+    if (!dataset) return res.status(400).json({ error: '"dataset" field is required.' });
+    if (!label)   return res.status(400).json({ error: '"label" field is required.' });
 
-    const makeField = (name, value) =>
-      Buffer.from(`--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}${value}${CRLF}`);
+    let imageBuffer, originalName;
 
-    const fileHead = Buffer.from(
-      `--${boundary}${CRLF}` +
-      `Content-Disposition: form-data; name="file"; filename="${req.file.originalname ?? 'image.jpg'}"${CRLF}` +
-      `Content-Type: ${req.file.mimetype ?? 'image/jpeg'}${CRLF}${CRLF}`
-    );
-    const tail = Buffer.from(`${CRLF}--${boundary}--${CRLF}`);
+    if (req.file) {
+      // ── multipart file ──────────────────────────────────────────────────────
+      imageBuffer  = req.file.buffer;
+      originalName = req.file.originalname ?? `upload${MIME_EXT[req.file.mimetype] ?? '.jpg'}`;
+    } else if (req.body?.image) {
+      // ── JSON base64 ─────────────────────────────────────────────────────────
+      const raw   = req.body.image.replace(/^data:[^;]+;base64,/, ''); // strip data-URI prefix if present
+      imageBuffer  = Buffer.from(raw, 'base64');
+      originalName = req.body.filename ?? '.jpg';
+    } else {
+      return res.status(400).json({
+        error: 'Provide an image file via multipart "file" field or JSON "image" (base64).',
+      });
+    }
 
-    const body = Buffer.concat([makeField('dataset', dataset), makeField('label', label), fileHead, req.file.buffer, tail]);
+    const result = await saveImage({ dataset, label, imageBuffer, originalName });
 
-    const r = await fetch(`${UPSTREAM}/dataset/upload`, {
-      method: 'POST',
-      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-      body,
-    });
-    res.status(r.status).json(await r.json());
+    res.status(201).json({ status: 'ok', ...result });
   } catch (err) { next(err); }
 });
 
@@ -65,24 +81,21 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
 router.delete('/:name/:label/:filename', async (req, res, next) => {
   try {
     const { name, label, filename } = req.params;
-    const r = await fetch(
-      `${UPSTREAM}/dataset/${encodeURIComponent(name)}/${encodeURIComponent(label)}/${encodeURIComponent(filename)}`,
-      { method: 'DELETE' }
-    );
-    r.status === 204 ? res.sendStatus(204) : res.status(r.status).json(await r.json());
+    const deleted = await deleteImage(name, label, filename);
+    deleted ? res.sendStatus(204) : res.status(404).json({ error: 'File not found.' });
   } catch (err) { next(err); }
 });
 
 // ── GET /dataset/:name/image/:label/:filename ─────────────────────────────────
-router.get('/:name/image/:label/:filename', async (req, res, next) => {
+router.get('/:name/image/:label/:filename', (req, res, next) => {
   try {
     const { name, label, filename } = req.params;
-    const r = await fetch(
-      `${UPSTREAM}/dataset/${encodeURIComponent(name)}/image/${encodeURIComponent(label)}/${encodeURIComponent(filename)}`
-    );
-    if (!r.ok) return res.status(r.status).end();
-    const buf  = Buffer.from(await r.arrayBuffer());
-    const mime = r.headers.get('content-type') ?? 'image/jpeg';
-    res.setHeader('Content-Type', mime).send(buf);
+    const filePath = getImagePath(name, label, filename);
+    if (!filePath) return res.status(404).json({ error: 'Image not found.' });
+
+    const ext  = extname(filename).toLowerCase();
+    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+    res.setHeader('Content-Type', mime);
+    createReadStream(filePath).pipe(res);
   } catch (err) { next(err); }
 });
