@@ -1,11 +1,19 @@
 {
-  "labels": [],
-  "classes": [],
-  "numClasses": 0,
-  "imageSize": 224,
+  "labels": [
+    "blue",
+    "green",
+    "red"
+  ],
+  "classes": [
+    "blue",
+    "green",
+    "red"
+  ],
+  "numClasses": 3,
+  "imageSize": 64,
   "architecture": "mobilenet_v2",
-  "trainedAt": null,
-  "epochs": 0,
-  "accuracy": null,
-  "device": null
+  "trainedAt": "2026-02-23T07:30:39Z",
+  "epochs": 3,
+  "accuracy": 0.6667,
+  "device": "cpu"
 }
