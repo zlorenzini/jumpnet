@@ -7,6 +7,7 @@ import { router as composeRouter      } from './routes/compose.js';
 import { router as imprintRouter      } from './routes/imprint.js';
 import { router as statusRouter       } from './routes/status.js';
 import { router as capabilitiesRouter } from './routes/capabilities.js';
+import { router as devicesRouter      } from './routes/devices.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 export const UPSTREAM = process.env.JUMPSMARTS_URL ?? 'http://localhost:7312';
@@ -31,6 +32,7 @@ app.use('/compose',      composeRouter);
 app.use('/imprint',      imprintRouter);
 app.use('/status',       statusRouter);
 app.use('/capabilities', capabilitiesRouter);
+app.use('/devices',      devicesRouter);
 
 // 404 catch-all
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));

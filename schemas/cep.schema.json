@@ -1,0 +1,172 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://jumpnet.local/schemas/cep.schema.json",
+  "title": "JumpNet Capability Enumeration Protocol (CEP)",
+  "description": "Self-description document emitted by any JumpNet-connected device.",
+  "type": "object",
+  "required": ["device", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "device": {
+      "type": "object",
+      "required": ["id", "class", "transport"],
+      "additionalProperties": true,
+      "properties": {
+        "id":        { "type": "string",  "description": "Unique identifier — MAC, serial, or UUID" },
+        "class":     { "type": "string",  "enum": ["microcontroller", "computer", "sensor-node"] },
+        "transport": { "type": "string",  "enum": ["serial", "usb", "network", "ble", "lora"] },
+        "firmware":  { "type": "string",  "description": "Firmware version string" },
+        "model":     { "type": "string",  "description": "Board model e.g. ESP32-S3, Pico W" },
+        "reportedAt":{ "type": "string",  "format": "date-time" }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "gpio", "i2c", "spi", "uart", "pwm", "adc", "dac",
+              "neopixel", "audio_out", "display", "storage",
+              "network", "compute", "sensor", "ble", "lora"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "type": { "const": "i2c" } } },
+            "then": {
+              "properties": {
+                "buses": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "sda", "scl"],
+                    "properties": {
+                      "id":           { "type": "integer" },
+                      "sda":          { "type": "integer" },
+                      "scl":          { "type": "integer" },
+                      "freq_hz":      { "type": "integer" },
+                      "devices_found":{ "type": "array", "items": { "type": "string" } }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "spi" } } },
+            "then": {
+              "properties": {
+                "buses": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "mosi", "miso", "sck"],
+                    "properties": {
+                      "id":   { "type": "integer" },
+                      "mosi": { "type": "integer" },
+                      "miso": { "type": "integer" },
+                      "sck":  { "type": "integer" },
+                      "cs":   { "type": "integer" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "neopixel" } } },
+            "then": {
+              "properties": {
+                "pin":      { "type": "integer" },
+                "max_leds": { "type": "integer" }
+              },
+              "required": ["pin"]
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "gpio" } } },
+            "then": {
+              "properties": {
+                "pins":       { "type": "array", "items": { "type": "integer" } },
+                "digital_in": { "type": "array", "items": { "type": "integer" } },
+                "digital_out":{ "type": "array", "items": { "type": "integer" } }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "adc" } } },
+            "then": {
+              "properties": {
+                "pins":       { "type": "array", "items": { "type": "integer" } },
+                "resolution": { "type": "integer", "description": "Bit depth e.g. 12" },
+                "channels":   { "type": "integer" }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "network" } } },
+            "then": {
+              "properties": {
+                "interfaces": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind":    { "type": "string", "enum": ["wifi", "ethernet", "ble", "lora"] },
+                      "mac":     { "type": "string" },
+                      "ip":      { "type": "string" },
+                      "ssid":    { "type": "string" },
+                      "rssi_db": { "type": "integer" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "sensor" } } },
+            "then": {
+              "properties": {
+                "chipset":  { "type": "string" },
+                "bus":      { "type": "string" },
+                "bus_id":   { "type": "integer" },
+                "address":  { "type": "string" },
+                "provides": { "type": "array", "items": { "type": "string" } }
+              },
+              "required": ["chipset", "provides"]
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "compute" } } },
+            "then": {
+              "properties": {
+                "mhz":      { "type": "number" },
+                "cores":    { "type": "integer" },
+                "ram_kb":   { "type": "integer" },
+                "flash_kb": { "type": "integer" },
+                "gpu":      { "type": "string", "enum": ["none", "available"] }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "type": { "const": "display" } } },
+            "then": {
+              "properties": {
+                "chipset":    { "type": "string" },
+                "width_px":   { "type": "integer" },
+                "height_px":  { "type": "integer" },
+                "color":      { "type": "boolean" },
+                "bus":        { "type": "string" }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
