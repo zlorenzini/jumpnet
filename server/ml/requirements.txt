@@ -1,4 +1,13 @@
-# Python dependencies for JumpNet ML (train.py + infer.py)
+# Python dependencies for JumpNet ML (jumpsmarts.py + train.py + infer.py + infer_onnx.py)
+
+# ── JumpSmartsRuntime (jumpsmarts.py) ─────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
+# ── PyTorch backend (train.py, infer.py, export_onnx.py) ──────────────────────
+#
+# ── PyTorch backend (train.py, infer.py, export_onnx.py) ──────────────────────
 #
 # PyTorch + Torchvision for 1660Ti (CUDA 12.1):
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
@@ -12,3 +21,17 @@
 torch>=2.1.0
 torchvision>=0.16.0
 Pillow>=10.0.0
+
+# ── ONNX backend (infer_onnx.py, INFER_BACKEND=onnx) ──────────────────────────
+#
+# For Snapdragon devices (Hexagon NPU via QNN EP) — ARM64 Linux / proot-distro:
+#   pip install onnxruntime-qnn pillow numpy
+#
+# For any other platform (CPU only):
+#   pip install onnxruntime pillow numpy
+#
+# onnxruntime-qnn includes the QNN Execution Provider and libQnnHtp.so.
+# Set QNN_BACKEND_PATH if your libQnnHtp.so is not on LD_LIBRARY_PATH.
+#
+# numpy and Pillow are already listed above (shared with PyTorch path).
+onnx>=1.15.0

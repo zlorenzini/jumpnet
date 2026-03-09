@@ -4,34 +4,26 @@
  * POST /infer
  *
  * Accepts:
- *   - multipart/form-data  with field "image" (image file)
- *   - JSON { image: "<base64>" }
- *   - JSON { imageId: "<dataset>/<label>/<filename>" }
+ *   - multipart/form-data  with field "image" (image file) + optional "bundleId"
+ *   - JSON { image: "<base64>", bundleId?: string }
+ *   - JSON { imageId: "<dataset>/<label>/<filename>", bundleId?: string }
  *
- * Runs local MobileNetV2 inference via server/ml/infer.py.
- * Falls back with a clear error if no model is trained yet.
+ * Converts the image to base64 and proxies to JumpSmartsRuntime (port 7312).
  *
  * Optional: if GPU_HELPER_URL is set and that node advertises a GPU,
  * the request is delegated there first.
  */
-import { Router }            from 'express';
-import multer                from 'multer';
-import { fileURLToPath }     from 'node:url';
-import { join }              from 'node:path';
-import { existsSync }        from 'node:fs';
-import { writeFile, unlink } from 'node:fs/promises';
-import { randomUUID }        from 'node:crypto';
-import { tmpdir }            from 'node:os';
-import { getImagePath }      from '../localDatastore.js';
-import { runInfer }          from '../mlRunner.js';
-import { tryDelegate }       from '../lib/delegate.js';
+import { Router }   from 'express';
+import multer       from 'multer';
+import { readFile } from 'node:fs/promises';
+import { UPSTREAM } from '../server.js';
+import { getImagePath } from '../localDatastore.js';
+import { tryDelegate }  from '../lib/delegate.js';
 
-const router    = Router();
-const upload    = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
-const MODEL_DIR = fileURLToPath(new URL('../../models/current', import.meta.url));
+const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 router.post('/', upload.single('image'), async (req, res, next) => {
-  let tmpPath = null;
   try {
     // ── Optional delegation ───────────────────────────────────────────────
     if (process.env.GPU_HELPER_URL) {
@@ -39,52 +31,42 @@ router.post('/', upload.single('image'), async (req, res, next) => {
       if (delegated !== null) return res.json(delegated);
     }
 
-    // ── Model presence check ──────────────────────────────────────────────
-    const modelPth = join(MODEL_DIR, 'model.pth');
-    if (!existsSync(modelPth)) {
-      return res.status(503).json({
-        error:    'No trained model found.',
-        hint:     'POST /train with a datasetId to train a model first.',
-        modelDir: MODEL_DIR,
-      });
-    }
-
-    // ── Resolve image ─────────────────────────────────────────────────────
-    let imagePath = null;
+    // ── Resolve image → base64 ────────────────────────────────────────────
+    let imageBase64 = null;
 
     if (req.file) {
-      tmpPath   = join(tmpdir(), `jumpnet_infer_${randomUUID()}.jpg`);
-      await writeFile(tmpPath, req.file.buffer);
-      imagePath = tmpPath;
+      imageBase64 = req.file.buffer.toString('base64');
     } else if (req.body?.imageId) {
       const parts = req.body.imageId.split('/');
       if (parts.length < 3) {
         return res.status(400).json({ error: 'imageId must be "dataset/label/filename"' });
       }
       const [dataset, label, ...rest] = parts;
-      const filename = rest.join('/');
-      imagePath = getImagePath(dataset, label, filename);
-      if (!imagePath) {
+      const filePath = getImagePath(dataset, label, rest.join('/'));
+      if (!filePath) {
         return res.status(404).json({ error: `Image not found: ${req.body.imageId}` });
       }
+      imageBase64 = (await readFile(filePath)).toString('base64');
     } else if (req.body?.image) {
-      const b64  = req.body.image.split(',').at(-1);
-      const buf  = Buffer.from(b64, 'base64');
-      tmpPath    = join(tmpdir(), `jumpnet_infer_${randomUUID()}.jpg`);
-      await writeFile(tmpPath, buf);
-      imagePath  = tmpPath;
+      imageBase64 = req.body.image.split(',').at(-1);
     } else {
       return res.status(400).json({
         error: 'Provide multipart "image", JSON { image: "<base64>" }, or JSON { imageId: "dataset/label/file" }',
       });
     }
 
-    const result = await runInfer({ imagePath, modelDir: MODEL_DIR });
-    res.json(result);
+    // ── Proxy to JumpSmartsRuntime ────────────────────────────────────────
+    const r = await fetch(`${UPSTREAM}/infer`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ imageBase64, bundleId: req.body?.bundleId ?? 'current' }),
+      signal:  AbortSignal.timeout(60_000),
+    });
+
+    const data = await r.json();
+    res.status(r.status).json(data);
   } catch (err) {
     next(err);
-  } finally {
-    if (tmpPath) unlink(tmpPath).catch(() => {});
   }
 });
 

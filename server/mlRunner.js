@@ -79,4 +79,11 @@ export function runPython(scriptName, input, onProgress) {
 }
 
 export const runTrain = (input, onProgress) => runPython('train.py', input, onProgress);
-export const runInfer = (input, onProgress) => runPython('infer.py', input, onProgress);
+
+// Select inference backend via INFER_BACKEND env var:
+//   (unset)    → infer.py       PyTorch, runs on the machine that trained the model
+//   onnx       → infer_onnx.py  ONNX Runtime; targets Qualcomm Hexagon NPU (QNN EP)
+//                               on Snapdragon devices, CPU fallback everywhere else
+const INFER_SCRIPT = process.env.INFER_BACKEND === 'onnx' ? 'infer_onnx.py' : 'infer.py';
+
+export const runInfer = (input, onProgress) => runPython(INFER_SCRIPT, input, onProgress);
