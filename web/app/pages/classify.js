@@ -6,9 +6,9 @@ export function renderClassify(el) {
     <h1>🔍 Classify</h1>
     <p class="page-subtitle">Upload an image or drag-and-drop to classify it against a trained model.</p>
 
-    <div class="card">
+    <div class="card" id="upload-card">
       <div class="drop-zone" id="drop-zone">
-        <span class="drop-icon">📷</span>
+        <span class="drop-icon">🖼️</span>
         <div>Drag an image here, or click to browse</div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">JPEG · PNG · WebP · BMP</div>
         <input type="file" id="file-input" accept="image/*" style="display:none;">
@@ -24,15 +24,24 @@ export function renderClassify(el) {
       </div>
 
       <div class="btn-group">
-        <button class="btn btn-primary" id="classify-btn" disabled>
-          Classify
-        </button>
-        <button class="btn btn-secondary" id="capture-btn">
-          📷 Capture from Camera
-        </button>
-        <button class="btn btn-secondary" id="clear-btn" style="display:none">
-          Clear
-        </button>
+        <button class="btn btn-primary" id="classify-btn" disabled>Classify</button>
+        <button class="btn btn-secondary" id="capture-btn">📷 Capture from Camera</button>
+        <button class="btn btn-secondary" id="clear-btn" style="display:none">Clear</button>
+      </div>
+    </div>
+
+    <!-- ── Live camera panel ── -->
+    <div class="card camera-panel" id="camera-card" style="display:none">
+      <div class="camera-viewfinder">
+        <video id="camera-video" autoplay playsinline muted></video>
+        <canvas id="camera-canvas" style="display:none"></canvas>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);text-align:center;margin:10px 0 0">
+        Position your object in the frame, then press <strong>📸 Snap</strong>.
+      </p>
+      <div class="btn-group" style="justify-content:center;margin-top:14px">
+        <button class="btn btn-primary" id="snap-btn">📸 Snap</button>
+        <button class="btn btn-secondary" id="camera-cancel-btn">✕ Cancel</button>
       </div>
     </div>
 
@@ -48,6 +57,8 @@ export function renderClassify(el) {
   `;
 
   // ── Refs ─────────────────────────────────────────────────────────────────────
+  const uploadCard  = el.querySelector('#upload-card');
+  const cameraCard  = el.querySelector('#camera-card');
   const dropZone    = el.querySelector('#drop-zone');
   const fileInput   = el.querySelector('#file-input');
   const previewImg  = el.querySelector('#preview-img');
@@ -60,26 +71,23 @@ export function renderClassify(el) {
   const resultConf  = el.querySelector('#result-conf');
   const confBar     = el.querySelector('#conf-bar');
   const resultMeta  = el.querySelector('#result-meta');
+  const cameraVideo  = el.querySelector('#camera-video');
+  const cameraCanvas = el.querySelector('#camera-canvas');
+  const snapBtn      = el.querySelector('#snap-btn');
+  const cameraCancelBtn = el.querySelector('#camera-cancel-btn');
 
   let selectedFile = null;
+  let mediaStream  = null;
 
-  // ── Drop zone interactions ────────────────────────────────────────────────────
+  // ── Drop zone ────────────────────────────────────────────────────────────────
   dropZone.addEventListener('click', () => fileInput.click());
-
-  dropZone.addEventListener('dragover', e => {
-    e.preventDefault();
-    dropZone.classList.add('drag-over');
-  });
-
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-
   dropZone.addEventListener('drop', e => {
     e.preventDefault();
     dropZone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) setFile(file);
+    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
   });
-
   fileInput.addEventListener('change', () => {
     if (fileInput.files[0]) setFile(fileInput.files[0]);
   });
@@ -124,13 +132,9 @@ export function renderClassify(el) {
         body:    JSON.stringify(body),
         signal:  AbortSignal.timeout(10000),
       });
-
       const d = await r.json();
 
-      if (!r.ok) {
-        toast(d.error ?? 'Inference failed', 'error');
-        return;
-      }
+      if (!r.ok) { toast(d.error ?? 'Inference failed', 'error'); return; }
 
       const pct = Math.round((d.confidenceScore ?? 0) * 100);
       resultLabel.textContent = d.output ?? '(unknown)';
@@ -138,7 +142,6 @@ export function renderClassify(el) {
       confBar.style.width     = `${pct}%`;
       resultMeta.textContent  = `Bundle: ${d.bundleId ?? '—'}  ·  ${d.elapsedMs ?? '—'} ms`;
       resultBox.style.display = 'block';
-
       toast(`Classified as "${d.output}" (${pct}%)`, 'success');
     } catch (err) {
       toast(`Error: ${err.message}`, 'error');
@@ -148,39 +151,50 @@ export function renderClassify(el) {
     }
   }
 
-  // ── Capture from server camera ────────────────────────────────────────────────
+  // ── Camera flow ──────────────────────────────────────────────────────────────
   captureBtn.addEventListener('click', async () => {
-    captureBtn.disabled = true;
-    captureBtn.innerHTML = '<span class="spinner"></span>Capturing…';
-
     try {
-      const r = await fetch('/capture', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({}),
-        signal:  AbortSignal.timeout(30000),
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 960 }, height: { ideal: 720 }, facingMode: 'environment' },
+        audio: false,
       });
-      const d = await r.json();
-
-      if (!r.ok) {
-        toast(d.error ?? 'Capture failed', 'error');
-        return;
-      }
-
-      const pct = Math.round((d.confidenceScore ?? 0) * 100);
-      resultLabel.textContent = d.output ?? '(unknown)';
-      resultConf.textContent  = `Confidence: ${pct}%`;
-      confBar.style.width     = `${pct}%`;
-      resultMeta.textContent  = `Bundle: ${d.bundleId ?? '—'}  ·  Captured + inferred in ${d.totalMs ?? '—'} ms`;
-      resultBox.style.display = 'block';
-
-      toast(`Captured: "${d.output}" (${pct}%)`, 'success');
+      cameraVideo.srcObject = mediaStream;
+      await cameraVideo.play();
+      uploadCard.style.display = 'none';
+      cameraCard.style.display = 'block';
+      resultBox.style.display  = 'none';
     } catch (err) {
-      toast(`Capture error: ${err.message}`, 'error');
-    } finally {
-      captureBtn.disabled = false;
-      captureBtn.innerHTML = '📷 Capture from Camera';
+      toast(`Camera unavailable: ${err.message}`, 'error');
     }
+  });
+
+  function stopCamera() {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
+    }
+    cameraVideo.srcObject = null;
+    cameraCard.style.display  = 'none';
+    uploadCard.style.display  = 'block';
+  }
+
+  cameraCancelBtn.addEventListener('click', stopCamera);
+
+  snapBtn.addEventListener('click', async () => {
+    // Draw the current video frame to an offscreen canvas
+    const w = cameraVideo.videoWidth  || 960;
+    const h = cameraVideo.videoHeight || 720;
+    cameraCanvas.width  = w;
+    cameraCanvas.height = h;
+    cameraCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, w, h);
+
+    // Convert to a Blob, then treat it like a dropped file
+    cameraCanvas.toBlob(async blob => {
+      stopCamera();
+      const file = new File([blob], 'snapshot.jpg', { type: 'image/jpeg' });
+      setFile(file);
+      await runInference(file);
+    }, 'image/jpeg', 0.92);
   });
 }
 
