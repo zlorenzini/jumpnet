@@ -4,7 +4,16 @@ data/
 .DS_Store
 Thumbs.db
 
-# Trained model weights (large binary — regenerated via POST /train)
+# Trained model weights (large binary — regenerated via POST /train or export_onnx.py)
 models/current/model.pth
+models/current/model.onnx
 __pycache__/
 *.pyc
+*.pyo
+
+# Python virtual environment
+.venv/
+
+# Runtime artefacts
+.pids/
+logs/

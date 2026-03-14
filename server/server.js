@@ -1,4 +1,6 @@
 import express      from 'express';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 import { router as inferRouter        } from './routes/infer.js';
 import { router as trainRouter        } from './routes/train.js';
 import { router as embedRouter        } from './routes/embed.js';
@@ -14,9 +16,16 @@ import { router as captureRouter      } from './routes/capture.js';
 export const UPSTREAM = process.env.JUMPSMARTS_URL ?? 'http://localhost:7312';
 export const PORT     = parseInt(process.env.PORT  ?? '4080');
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WEB_DIR   = join(__dirname, '..', 'web');
+
 // ── App ───────────────────────────────────────────────────────────────────────
 const app = express();
 app.use(express.json({ limit: '50mb' }));
+
+// ── Serve the web application ─────────────────────────────────────────────────
+// All static assets (HTML, CSS, JS modules) served from /web
+app.use(express.static(WEB_DIR));
 
 // Request logger (dev-friendly)
 app.use((req, _res, next) => {

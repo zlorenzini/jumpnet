@@ -53,6 +53,13 @@ _started_at = time.time()
 _jobs: dict[str, dict] = {}   # job_id → job dict
 
 
+# ── Model cache ───────────────────────────────────────────────────────────────
+# Keyed by bundle_id → { "session": ort.InferenceSession, "meta": dict }
+#                  OR  { "net": torch_net, "tf": transforms, "device": device, "meta": dict }
+_model_cache: dict = {}
+_cache_lock = threading.Lock()
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _list_bundles() -> list[dict]:
@@ -60,14 +67,16 @@ def _list_bundles() -> list[dict]:
     if MODELS_DIR.exists():
         for d in sorted(MODELS_DIR.iterdir()):
             meta_f = d / "metadata.json"
-            entry  = {"bundleId": d.name}
+            has_model = (d / "model.onnx").exists() or (d / "model.pth").exists()
+            if not has_model:
+                continue
+            entry = {"bundleId": d.name, "backend": "onnx" if (d / "model.onnx").exists() else "torch"}
             if meta_f.exists():
                 try:
                     entry.update(json.loads(meta_f.read_text()))
                 except Exception:
                     pass
-            if (d / "model.pth").exists():
-                bundles.append(entry)
+            bundles.append(entry)
     return bundles
 
 
@@ -77,57 +86,136 @@ def _load_image(raw_bytes: bytes):
     return Image.open(io.BytesIO(raw_bytes)).convert("RGB")
 
 
-def _run_infer(raw_bytes: bytes, bundle_id: str = "current") -> dict:
-    """Load model for bundle_id, run inference, return result dict."""
+def _load_bundle_onnx(bundle_id: str, model_dir: Path, meta: dict) -> dict:
+    """Load an ONNX model into an InferenceSession and cache it."""
+    import numpy as np
+    import onnxruntime as ort
+    sess_opts = ort.SessionOptions()
+    sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    session = ort.InferenceSession(
+        str(model_dir / "model.onnx"),
+        sess_options=sess_opts,
+        providers=["CPUExecutionProvider"],
+    )
+    entry = {"backend": "onnx", "session": session, "meta": meta}
+    with _cache_lock:
+        _model_cache[bundle_id] = entry
+    print(f"[jumpsmarts] Loaded ONNX bundle '{bundle_id}' ({meta.get('numClasses',0)} classes)", flush=True)
+    return entry
+
+
+def _load_bundle_torch(bundle_id: str, model_dir: Path, meta: dict) -> dict:
+    """Load a PyTorch .pth model and cache it."""
     import torch
     import torch.nn as nn
-    from torchvision import transforms, models
-
-    model_dir  = MODELS_DIR / bundle_id
-    model_path = model_dir / "model.pth"
-    meta_path  = model_dir / "metadata.json"
-
-    if not model_path.exists():
-        raise HTTPException(
-            status_code=503,
-            detail=f"No model found for bundle '{bundle_id}'. Train first via POST /train.",
-        )
-    if not meta_path.exists():
-        raise HTTPException(status_code=503, detail="metadata.json missing.")
-
-    meta     = json.loads(meta_path.read_text())
+    from torchvision import transforms, models as tv_models
     classes  = meta.get("classes") or meta.get("labels") or []
     img_size = meta.get("imageSize", 224)
-    num_cls  = len(classes)
-
-    if not classes:
-        raise HTTPException(status_code=503, detail="metadata.json has no class labels.")
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    net = models.mobilenet_v2(weights=None)
-    net.classifier[1] = nn.Linear(net.classifier[1].in_features, num_cls)
-    net.load_state_dict(torch.load(str(model_path), map_location=device, weights_only=True))
+    device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net = tv_models.mobilenet_v2(weights=None)
+    net.classifier[1] = nn.Linear(net.classifier[1].in_features, len(classes))
+    net.load_state_dict(torch.load(str(model_dir / "model.pth"), map_location=device, weights_only=True))
     net.to(device).eval()
-
     tf = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
+    entry = {"backend": "torch", "net": net, "tf": tf, "device": device, "meta": meta}
+    with _cache_lock:
+        _model_cache[bundle_id] = entry
+    print(f"[jumpsmarts] Loaded PyTorch bundle '{bundle_id}' ({len(classes)} classes)", flush=True)
+    return entry
 
-    img    = _load_image(raw_bytes)
-    tensor = tf(img).unsqueeze(0).to(device)
 
+def _get_bundle(bundle_id: str) -> dict:
+    """Return cached bundle entry, loading it if necessary."""
+    with _cache_lock:
+        cached = _model_cache.get(bundle_id)
+    if cached:
+        return cached
+
+    model_dir = MODELS_DIR / bundle_id
+    meta_path = model_dir / "metadata.json"
+
+    if not meta_path.exists():
+        raise HTTPException(status_code=503, detail=f"metadata.json not found for bundle '{bundle_id}'.")
+
+    meta    = json.loads(meta_path.read_text())
+    classes = meta.get("classes") or meta.get("labels") or []
+    if not classes:
+        raise HTTPException(status_code=503, detail="metadata.json has no class labels.")
+
+    # Prefer ONNX (lightweight, no torch required)
+    if (model_dir / "model.onnx").exists():
+        try:
+            return _load_bundle_onnx(bundle_id, model_dir, meta)
+        except ImportError:
+            pass  # onnxruntime not installed — fall through to torch
+
+    if (model_dir / "model.pth").exists():
+        try:
+            return _load_bundle_torch(bundle_id, model_dir, meta)
+        except ImportError as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"No inference backend available. Install onnxruntime or torch. ({e})",
+            )
+
+    raise HTTPException(
+        status_code=503,
+        detail=f"No model file (model.onnx or model.pth) found for bundle '{bundle_id}'.",
+    )
+
+
+def _infer_onnx(entry: dict, raw_bytes: bytes) -> dict:
+    import numpy as np
+    meta     = entry["meta"]
+    classes  = meta.get("classes") or meta.get("labels") or []
+    img_size = meta.get("imageSize", 224)
+    img      = _load_image(raw_bytes).resize((img_size, img_size))
+    arr      = np.array(img, dtype=np.float32) / 255.0
+    mean     = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std      = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    arr      = ((arr - mean) / std).transpose(2, 0, 1)[np.newaxis]  # NCHW
+    session  = entry["session"]
+    input_name = session.get_inputs()[0].name
+    logits   = session.run(None, {input_name: arr})[0][0]
+    # softmax
+    e = np.exp(logits - logits.max())
+    probs = (e / e.sum()).tolist()
+    scores = {c: round(p, 4) for c, p in zip(classes, probs)}
+    return classes, probs, scores
+
+
+def _infer_torch(entry: dict, raw_bytes: bytes) -> tuple:
+    import torch
+    meta     = entry["meta"]
+    classes  = meta.get("classes") or meta.get("labels") or []
+    img      = _load_image(raw_bytes)
+    tensor   = entry["tf"](img).unsqueeze(0).to(entry["device"])
     with torch.no_grad():
-        probs = torch.softmax(net(tensor), dim=1)[0].cpu().tolist()
+        probs = torch.softmax(entry["net"](tensor), dim=1)[0].cpu().tolist()
+    scores = {c: round(p, 4) for c, p in zip(classes, probs)}
+    return classes, probs, scores
 
-    prediction = classes[probs.index(max(probs))]
-    scores     = {c: round(p, 4) for c, p in zip(classes, probs)}
+
+def _run_infer(raw_bytes: bytes, bundle_id: str = "current") -> dict:
+    """Run inference for bundle_id. ONNX preferred; falls back to PyTorch."""
+    entry    = _get_bundle(bundle_id)
+    backend  = entry["backend"]
+
+    if backend == "onnx":
+        classes, probs, scores = _infer_onnx(entry, raw_bytes)
+    else:
+        classes, probs, scores = _infer_torch(entry, raw_bytes)
+
+    max_prob   = max(probs)
+    prediction = classes[probs.index(max_prob)]
 
     return {
         "prediction":     prediction,
-        "confidenceScore": round(max(probs), 4),
+        "confidenceScore": round(max_prob, 4),
         "scores":          scores,
         "bundleId":        bundle_id,
     }
@@ -233,6 +321,10 @@ def _run_training(job_id: str, config: dict):
             net.load_state_dict(best_state)
         torch.save(net.state_dict(), str(model_dir / "model.pth"))
 
+        # Evict any cached version of this bundle so it reloads from the new .pth
+        with _cache_lock:
+            _model_cache.pop(model_dir.name, None)
+
         metadata = {
             "labels":       labels,
             "classes":      labels,
@@ -277,6 +369,38 @@ def status():
 @app.get("/bundles")
 def list_bundles():
     return _list_bundles()
+
+
+@app.get("/bundles/{bundle_id}")
+def get_bundle_info(bundle_id: str):
+    model_dir = MODELS_DIR / bundle_id
+    meta_path = model_dir / "metadata.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found.")
+    entry = {"bundleId": bundle_id, "backend": "onnx" if (model_dir / "model.onnx").exists() else "torch"}
+    entry.update(json.loads(meta_path.read_text()))
+    entry["loaded"] = bundle_id in _model_cache
+    return entry
+
+
+@app.post("/bundles/{bundle_id}/load")
+def load_bundle(bundle_id: str):
+    """Pre-warm the model cache for a bundle. Returns immediately if already loaded."""
+    with _cache_lock:
+        if bundle_id in _model_cache:
+            return {"bundleId": bundle_id, "status": "already_loaded", "backend": _model_cache[bundle_id]["backend"]}
+    entry = _get_bundle(bundle_id)  # raises HTTPException if not found
+    return {"bundleId": bundle_id, "status": "loaded", "backend": entry["backend"]}
+
+
+@app.post("/bundles/{bundle_id}/unload")
+def unload_bundle(bundle_id: str):
+    """Remove a bundle from the in-memory cache."""
+    with _cache_lock:
+        removed = _model_cache.pop(bundle_id, None)
+    if removed is None:
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' is not loaded.")
+    return {"bundleId": bundle_id, "status": "unloaded"}
 
 
 @app.post("/infer")

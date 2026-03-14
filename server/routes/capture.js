@@ -9,9 +9,9 @@
  * Optional body (JSON):
  *   bundleId   string   model bundle to use (default: "current")
  *   device     string   v4l2 device         (default: "/dev/video0")
- *   resolution string   WxH                 (default: "1280x720")
- *   fps        number   framerate hint       (default: 30)
- *   warmup     number   frames to discard for AE/AWB settle (default: 10)
+ *   resolution string   WxH                 (default: "960x720")
+ *   fps        number   framerate hint       (default: 10)
+ *   warmup     number   frames to discard for AE/AWB settle (default: 3)
  */
 
 import { Router }  from 'express';
@@ -25,9 +25,9 @@ const router    = Router();
 
 const DEFAULTS = {
   device:      '/dev/video0',
-  resolution:  '1280x720',
-  fps:         30,
-  warmup:      10,   // frames captured before the keeper — lets AE/AWB settle
+  resolution:  '960x720',
+  fps:         10,
+  warmup:      3,    // frames captured before the keeper — lets AE/AWB settle
   capturePath: '/tmp/jumpnet_capture.jpg',
 };
 
@@ -47,7 +47,7 @@ router.post('/', async (req, res, next) => {
     const cmd = [
       'ffmpeg',
       '-f v4l2',
-      '-input_format mjpeg',
+      '-input_format yuyv422',
       `-video_size ${resolution}`,
       `-framerate ${fps}`,
       `-i ${device}`,
