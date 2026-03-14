@@ -313,10 +313,13 @@ code { padding: 2px 6px; color: var(--accent3); }
 .camera-viewfinder {
   position: relative;
   width: 100%;
+  /* Never taller than the viewport minus header + buttons + breathing room */
+  max-height: calc(100vh - 260px);
   aspect-ratio: 4/3;
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
+  margin: 0 auto;  /* centre when aspect-ratio narrows the width */
 }
 .camera-viewfinder video {
   width: 100%;
