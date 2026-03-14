@@ -5,15 +5,79 @@
  * No upstream dependency — works standalone.
  */
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { randomUUID }    from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { homedir }       from 'node:os';
 
 export const DATA_DIR = process.env.DATA_DIR
   ?? fileURLToPath(new URL('../data', import.meta.url));
 
 const DATASETS_ROOT = join(DATA_DIR, 'datasets');
+
+// ── JUMPAPP drive discovery ───────────────────────────────────────────────────
+
+/**
+ * Scan standard mount-point roots for directories that contain a
+ * jumpapp.json file (the marker for a JUMPAPP portable drive).
+ *
+ * Checked locations (Linux / macOS):
+ *   /media/*             /media/<user>/*
+ *   /run/media/<user>/*  /mnt/*  /Volumes/*
+ *
+ * @returns {Promise<Array<{ name, version, description, root, portable }>>}
+ */
+export async function scanJumpapps() {
+  const candidates = new Set();
+
+  // Roots that may contain mount-point subdirectories
+  const scanRoots = [
+    '/media',
+    '/mnt',
+    '/Volumes',
+    '/run/media',
+  ];
+
+  // Also check /media/<user>/*, /run/media/<user>/*
+  const userScanRoots = ['/media', '/run/media'];
+  for (const base of userScanRoots) {
+    try {
+      const entries = await readdir(base, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isDirectory()) scanRoots.push(join(base, e.name));
+      }
+    } catch { /* not mounted / unavailable */ }
+  }
+
+  for (const root of scanRoots) {
+    try {
+      const entries = await readdir(root, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isDirectory()) candidates.add(join(root, e.name));
+      }
+    } catch { /* ignore */ }
+  }
+
+  const results = [];
+  for (const dir of candidates) {
+    const marker = join(dir, 'jumpapp.json');
+    try {
+      const raw = await readFile(marker, 'utf8');
+      const meta = JSON.parse(raw);
+      results.push({
+        name:        meta.name        ?? null,
+        version:     meta.version     ?? null,
+        description: meta.description ?? null,
+        root:        dir,
+        portable:    meta.portable    ?? false,
+        storage:     meta.storage     ?? {},
+      });
+    } catch { /* not a jumpapp drive */ }
+  }
+
+  return results;
+}
 const ALLOWED_EXT   = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']);
 
 function isImage(name) {

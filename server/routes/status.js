@@ -12,6 +12,7 @@
  */
 import { Router } from 'express';
 import { UPSTREAM } from '../server.js';
+import { scanJumpapps } from '../localDatastore.js';
 
 export const router = Router();
 
@@ -24,9 +25,12 @@ router.get('/', async (_req, res) => {
     if (r.ok || r.status < 500) upstreamStatus = 'ok';
   } catch { /* unreachable */ }
 
+  const jumpapps = await scanJumpapps().catch(() => []);
+
   res.json({
     jumpnet:   { status: 'ok', uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) },
     upstream:  { status: upstreamStatus, url: UPSTREAM },
+    storage:   { jumpapps },
     timestamp: new Date().toISOString(),
   });
 });
