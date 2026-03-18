@@ -11,6 +11,7 @@ import { renderDemos,     renderDemo     } from './pages/demos.js';
 import { renderChallenges,renderChallenge} from './pages/challenges.js';
 import { renderClassify }   from './pages/classify.js';
 import { renderDataset }    from './pages/dataset.js';
+import { renderTrain   }    from './pages/train.js';
 import { renderStatus  }    from './pages/status.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ const PAGES = {
   challenges: (el, subId, nav) => subId ? renderChallenge(el, subId, nav) : renderChallenges(el, subId, nav),
   classify:   (el, subId, nav) => renderClassify(el, subId, nav),
   dataset:    (el, subId, nav) => renderDataset(el, subId, nav),
+  train:      (el, subId, nav) => renderTrain(el, subId, nav),
   status:     (el, subId, nav) => renderStatus(el, subId, nav),
 };
 

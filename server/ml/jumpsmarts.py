@@ -5,14 +5,15 @@ server/ml/jumpsmarts.py  —  JumpSmartsRuntime
 FastAPI ML backend for JumpNet.  Runs on port 7312.
 
 Endpoints:
-  GET  /status              health check
-  GET  /bundles             list trained model bundles
-  POST /infer               run image classification (multipart or JSON)
-  POST /train               start an async training job → { id, status }
-  GET  /train               list all jobs
-  GET  /train/{id}          job status + result
-  GET  /train/{id}/logs     streamed training log lines
-  POST /train/{id}/stop     request graceful stop
+  GET  /status                health check
+  GET  /bundles               list trained model bundles
+  POST /infer                 run image classification (multipart or JSON)
+  POST /train                 start an async training job → { id, status }
+  GET  /train                 list all jobs
+  GET  /train/{id}            job status + result
+  GET  /train/{id}/logs       log lines for a job
+  POST /train/{id}/stop       request graceful stop
+  POST /train/{id}/export     export best .pth → .onnx (GPU-accelerated on CUDA)
 
 Usage:
     python jumpsmarts.py
@@ -48,6 +49,17 @@ app.add_middleware(
 )
 
 _started_at = time.time()
+
+# ── Training availability ────────────────────────────────────────────────────
+# Probed once at startup so the server never hard-crashes on import errors.
+try:
+    import torch as _torch_probe
+    TRAIN_AVAILABLE = True
+    TRAIN_UNAVAILABLE_REASON = None
+    del _torch_probe
+except ImportError as _e:
+    TRAIN_AVAILABLE = False
+    TRAIN_UNAVAILABLE_REASON = f"torch not installed: {_e}"
 
 # ── In-memory job store ────────────────────────────────────────────────────────
 _jobs: dict[str, dict] = {}   # job_id → job dict
@@ -86,21 +98,35 @@ def _load_image(raw_bytes: bytes):
     return Image.open(io.BytesIO(raw_bytes)).convert("RGB")
 
 
+def _ort_providers() -> list:
+    """Return the best available ORT execution providers (CUDA first, then CPU)."""
+    try:
+        import onnxruntime as ort
+        available = ort.get_available_providers()
+        if "CUDAExecutionProvider" in available:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    except Exception:
+        pass
+    return ["CPUExecutionProvider"]
+
+
 def _load_bundle_onnx(bundle_id: str, model_dir: Path, meta: dict) -> dict:
     """Load an ONNX model into an InferenceSession and cache it."""
     import numpy as np
     import onnxruntime as ort
     sess_opts = ort.SessionOptions()
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    providers = _ort_providers()
     session = ort.InferenceSession(
         str(model_dir / "model.onnx"),
         sess_options=sess_opts,
-        providers=["CPUExecutionProvider"],
+        providers=providers,
     )
-    entry = {"backend": "onnx", "session": session, "meta": meta}
+    backend_tag = "onnx-cuda" if providers[0] == "CUDAExecutionProvider" else "onnx"
+    entry = {"backend": backend_tag, "session": session, "meta": meta}
     with _cache_lock:
         _model_cache[bundle_id] = entry
-    print(f"[jumpsmarts] Loaded ONNX bundle '{bundle_id}' ({meta.get('numClasses',0)} classes)", flush=True)
+    print(f"[jumpsmarts] Loaded ONNX bundle '{bundle_id}' ({meta.get('numClasses',0)} classes) providers={providers}", flush=True)
     return entry
 
 
@@ -205,7 +231,7 @@ def _run_infer(raw_bytes: bytes, bundle_id: str = "current") -> dict:
     entry    = _get_bundle(bundle_id)
     backend  = entry["backend"]
 
-    if backend == "onnx":
+    if backend in ("onnx", "onnx-cuda"):
         classes, probs, scores = _infer_onnx(entry, raw_bytes)
     else:
         classes, probs, scores = _infer_torch(entry, raw_bytes)
@@ -360,9 +386,10 @@ def _run_training(job_id: str, config: dict):
 @app.get("/status")
 def status():
     return {
-        "status":       "ok",
-        "version":      "0.1.0",
-        "uptimeSeconds": round(time.time() - _started_at, 1),
+        "status":         "ok",
+        "version":        "0.1.0",
+        "uptimeSeconds":  round(time.time() - _started_at, 1),
+        "trainAvailable": TRAIN_AVAILABLE,
     }
 
 
@@ -434,6 +461,13 @@ async def infer(request: Request):
 
 @app.post("/train")
 async def start_train(request: Request):
+    if not TRAIN_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Training is not available on this node ({TRAIN_UNAVAILABLE_REASON}). "
+                    "Install torch + torchvision to enable training.",
+        )
+
     body = await request.json()
 
     dataset_id = body.get("datasetId") or body.get("dataset")
@@ -464,6 +498,14 @@ async def start_train(request: Request):
         "createdAt":  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     _jobs[job_id] = job
+
+    # Boost default batch size on GPU — 1660 Ti handles 32 comfortably
+    try:
+        import torch as _torch
+        if batch_size == 16 and _torch.cuda.is_available():
+            batch_size = 32
+    except ImportError:
+        pass
 
     config = {
         "datasetPath": str(dataset_path),
@@ -525,6 +567,83 @@ def stop_train(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     job["stop"] = True
     return {"id": job_id, "status": "stop requested"}
+
+
+@app.post("/train/{job_id}/export")
+def export_train(job_id: str):
+    """
+    Export the trained model.pth → model.onnx for the given job.
+    Runs export_onnx.py in-process so it can reuse the same Python env.
+    Uses CUDA if available (GTX 1660 Ti), then writes CPU-portable ONNX.
+    """
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if job["status"] not in ("done", "stopped"):
+        raise HTTPException(status_code=409, detail="Job must be done or stopped before exporting.")
+
+    bundle_id = job["bundleId"]
+    model_dir = MODELS_DIR / bundle_id
+    model_path    = model_dir / "model.pth"
+    metadata_path = model_dir / "metadata.json"
+    onnx_path     = model_dir / "model.onnx"
+
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail="model.pth not found — training may not have saved weights.")
+    if not metadata_path.exists():
+        raise HTTPException(status_code=404, detail="metadata.json not found.")
+
+    if not TRAIN_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Export is not available on this node ({TRAIN_UNAVAILABLE_REASON}). "
+                    "Install torch + torchvision to enable export.",
+        )
+
+    try:
+        import torch
+        import torch.nn as nn
+        from torchvision import models as tv_models
+
+        meta      = json.loads(metadata_path.read_text())
+        classes   = meta.get("classes") or meta.get("labels") or []
+        img_size  = meta.get("imageSize", 224)
+        num_cls   = len(classes)
+        opset     = 17
+
+        # Load weights on CPU so the exported ONNX runs on any device
+        net = tv_models.mobilenet_v2(weights=None)
+        net.classifier[1] = nn.Linear(net.classifier[1].in_features, num_cls)
+        net.load_state_dict(torch.load(str(model_path), map_location="cpu", weights_only=True))
+        net.eval()
+
+        dummy = torch.randn(1, 3, img_size, img_size)
+        torch.onnx.export(
+            net, dummy, str(onnx_path),
+            input_names=["image"],
+            output_names=["logits"],
+            dynamic_axes={"image": {0: "batch"}, "logits": {0: "batch"}},
+            opset_version=opset,
+            do_constant_folding=True,
+        )
+
+        size_kb = onnx_path.stat().st_size / 1024
+
+        # Evict cached version so next inference loads the fresh ONNX
+        with _cache_lock:
+            _model_cache.pop(bundle_id, None)
+
+        print(f"[jumpsmarts] Exported ONNX for bundle '{bundle_id}' ({size_kb:.0f} KB)", flush=True)
+        return {
+            "bundleId": bundle_id,
+            "onnxPath": str(onnx_path),
+            "sizeKb":   round(size_kb),
+            "opset":    opset,
+            "status":   "ok",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
 
 
 # ── Entry ──────────────────────────────────────────────────────────────────────

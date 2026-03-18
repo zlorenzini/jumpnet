@@ -63,7 +63,13 @@ router.post('/', upload.single('image'), async (req, res, next) => {
       signal:  AbortSignal.timeout(60_000),
     });
 
-    const data = await r.json();
+    let data;
+    try {
+      data = await r.json();
+    } catch {
+      const text = await r.text();
+      data = { error: text || 'Upstream returned a non-JSON response' };
+    }
     res.status(r.status).json(data);
   } catch (err) {
     next(err);

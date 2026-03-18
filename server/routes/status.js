@@ -20,17 +20,23 @@ const startedAt = Date.now();
 
 router.get('/', async (_req, res) => {
   let upstreamStatus = 'unreachable';
+  let trainAvailable = null;
   try {
-    const r = await fetch(`${UPSTREAM}/bundles`, { signal: AbortSignal.timeout(3000) });
-    if (r.ok || r.status < 500) upstreamStatus = 'ok';
+    const r = await fetch(`${UPSTREAM}/status`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok || r.status < 500) {
+      upstreamStatus = 'ok';
+      const data = await r.json().catch(() => ({}));
+      trainAvailable = data.trainAvailable ?? null;
+    }
   } catch { /* unreachable */ }
 
   const jumpapps = await scanJumpapps().catch(() => []);
 
   res.json({
-    jumpnet:   { status: 'ok', uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) },
-    upstream:  { status: upstreamStatus, url: UPSTREAM },
-    storage:   { jumpapps },
-    timestamp: new Date().toISOString(),
+    jumpnet:        { status: 'ok', uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000) },
+    upstream:       { status: upstreamStatus, url: UPSTREAM },
+    trainAvailable: trainAvailable,
+    storage:        { jumpapps },
+    timestamp:      new Date().toISOString(),
   });
 });
