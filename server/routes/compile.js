@@ -17,17 +17,19 @@
  * x86_64 only — returns 501 if the host CPU architecture is not x64.
  * Requires dxcom installed from https://github.com/DEEPX-AI/dx-compiler
  */
-import { Router }         from 'express';
-import { spawn, execFile } from 'node:child_process';
-import { execFileSync }    from 'node:child_process';
-import { promisify }       from 'node:util';
+import { Router }                     from 'express';
+import multer                          from 'multer';
+import { spawn, execFile }             from 'node:child_process';
+import { execFileSync }                from 'node:child_process';
+import { promisify }                   from 'node:util';
 import {
   existsSync, mkdirSync, writeFileSync,
   readFileSync, readdirSync, statSync,
+  rmSync, createReadStream,
 } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath }         from 'node:url';
-import { arch }                  from 'node:os';
+import { join, resolve, dirname }      from 'node:path';
+import { fileURLToPath }               from 'node:url';
+import { arch, tmpdir }                from 'node:os';
 
 const __dirname  = dirname(fileURLToPath(import.meta.url));
 const MODELS_DIR = resolve(join(__dirname, '..', '..', 'models'));
@@ -212,54 +214,58 @@ router.post('/', async (req, res, next) => {
   }
 });
 
-// ── POST /compile/dxnn — compile any ONNX model (path-based, audio/custom) ──
+// ── POST /compile/dxnn — compile any ONNX model (file upload, audio/custom) ──
 //
-// Designed for non-image models (e.g. AST audio) where dx_com's Python API
-// is needed for synthetic-noise calibration rather than image datasets.
-// Both the Pi and the JumpBox share /mnt/jumpdata, so no file upload is needed.
+// Accepts a multipart/form-data POST with the ONNX file. Compiles on this
+// host using the dx_com Python API with synthetic-noise calibration, then
+// streams the .dxnn back as binary. No shared filesystem required.
 //
-// JSON body:
-//   onnxPath        (required) — absolute path to .onnx on shared filesystem
-//   outputDir       (optional) — where to write .dxnn (default: same dir as onnx)
-//   modelName       (optional) — output stem (default: onnx filename stem)
-//   calibrationNum  (optional) — synthetic calibration samples (default: 20)
-//   inputShape      (optional) — e.g. [1, 1024, 128]  (auto-detected if absent)
-//   inputName       (optional) — ONNX input name (default: "input_values")
+// Form fields:
+//   model           (file, required)  — the .onnx model file
+//   modelName       (text, optional)  — output filename stem (default: onnx name)
+//   calibrationNum  (text, optional)  — synthetic calibration samples (default: 20)
+//   inputShape      (text, optional)  — JSON array e.g. "[1,1024,128]" (auto-detected if absent)
+//   inputName       (text, optional)  — ONNX input name (default: "input_values")
 //
-// Response: { dxnnPath, sizeBytes, elapsedMs }  or  { error }
+// Response: application/octet-stream (.dxnn bytes)  or  { error }
 
-router.post('/dxnn', async (req, res, next) => {
+const _multerUpload = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 500 * 1024 * 1024 },  // 500 MB max ONNX
+});
+
+router.post('/dxnn', _multerUpload.single('model'), async (req, res, next) => {
+  const compileTmp = join(tmpdir(), `jumpnet-compile-${Date.now()}`);
   try {
-    const { onnxPath, modelName, calibrationNum, inputShape, inputName } = req.body ?? {};
-    if (!onnxPath) return res.status(400).json({ error: '"onnxPath" is required' });
+    if (!req.file) return res.status(400).json({ error: '"model" ONNX file is required (multipart field: model)' });
 
-    const safeOnnx = resolve(String(onnxPath));
-    if (!safeOnnx.startsWith('/mnt/jumpdata') && !safeOnnx.startsWith(MODELS_DIR)) {
-      return res.status(403).json({ error: 'onnxPath must be under /mnt/jumpdata or models/' });
-    }
-    if (!existsSync(safeOnnx)) {
-      return res.status(404).json({ error: `onnxPath not found: ${safeOnnx}` });
-    }
+    const modelName      = String(req.body?.modelName ?? req.file.originalname.replace(/\.onnx$/i, '')).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const calibrationNum = Number(req.body?.calibrationNum ?? 20);
+    const inputShape     = req.body?.inputShape ? JSON.parse(req.body.inputShape) : null;
+    const inputName      = String(req.body?.inputName ?? 'input_values');
 
-    const outputDir = resolve(String(req.body.outputDir ?? dirname(safeOnnx)));
+    mkdirSync(compileTmp, { recursive: true });
+    const tmpOnnx   = join(compileTmp, `${modelName}.onnx`);
+    const outputDir = join(compileTmp, 'out');
     mkdirSync(outputDir, { recursive: true });
+    writeFileSync(tmpOnnx, req.file.buffer);
 
     const args = JSON.stringify({
-      onnx_path:       safeOnnx,
+      onnx_path:       tmpOnnx,
       output_dir:      outputDir,
-      model_name:      modelName ?? safeOnnx.split('/').pop().replace(/\.onnx$/i, ''),
+      model_name:      modelName,
       calibration_num: Number(calibrationNum ?? 20),
       input_shape:     inputShape ?? null,
       input_name:      inputName  ?? 'input_values',
     });
 
     // Write args to a temp file
-    const tmpArgs = join(outputDir, '.dxnn_args.json');
+    const tmpArgs = join(compileTmp, '.dxnn_args.json');
     writeFileSync(tmpArgs, args, 'utf8');
 
     const py = dxcomPython();
     const startMs = Date.now();
-    console.log(`[compile/dxnn] Starting for "${safeOnnx}" …`);
+    console.log(`[compile/dxnn] Compiling "${modelName}.onnx" (${req.file.size} bytes) …`);
 
     const { stdout, stderr } = await execFileAsync(
       py, [COMPILE_SCRIPT, tmpArgs],
@@ -271,13 +277,23 @@ router.post('/dxnn', async (req, res, next) => {
     const result = JSON.parse(stdout.trim());
     if (result.error) return res.status(500).json({ error: result.error });
 
-    const sizeBytes = statSync(result.dxnn_path).size;
-    res.json({
-      dxnnPath:  result.dxnn_path,
-      sizeBytes,
-      elapsedMs: Date.now() - startMs,
-    });
-  } catch (err) { next(err); }
+    const elapsedMs = Date.now() - startMs;
+    const dxnnPath  = result.dxnn_path;
+    console.log(`[compile/dxnn] Done in ${(elapsedMs / 1000).toFixed(1)}s → ${dxnnPath}`);
+
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${modelName}.dxnn"`);
+    res.set('X-Elapsed-Ms', String(elapsedMs));
+    res.set('X-Size-Bytes', String(statSync(dxnnPath).size));
+
+    const stream = createReadStream(dxnnPath);
+    stream.pipe(res);
+    stream.on('end',   () => { try { rmSync(compileTmp, { recursive: true, force: true }); } catch {} });
+    stream.on('error', err => { try { rmSync(compileTmp, { recursive: true, force: true }); } catch {}; next(err); });
+  } catch (err) {
+    try { rmSync(compileTmp, { recursive: true, force: true }); } catch {}
+    next(err);
+  }
 });
 
 export { router };
