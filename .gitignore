@@ -17,3 +17,6 @@ __pycache__/
 # Runtime artefacts
 .pids/
 logs/
+
+# Local node configuration (device-specific, not committed)
+.env

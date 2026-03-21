@@ -15,6 +15,16 @@ VENV="$SCRIPT_DIR/.venv/bin/python"
 PID_DIR="$SCRIPT_DIR/.pids"
 mkdir -p "$PID_DIR"
 
+# ── Load environment overrides (.env) ─────────────────────────────────────────
+# Place a .env file next to start.sh to configure this node without editing
+# the script. Common keys: DEVICE_ID, DEVICE_ROLES, DATA_DIR, GPU_HELPER_URL,
+# DX_COMPILE_URL, DXCOM_PYTHON, PORT.
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+  # shellcheck disable=SC1091
+  set -a; source "$SCRIPT_DIR/.env"; set +a
+  echo "[jumpnet] Loaded config from $SCRIPT_DIR/.env"
+fi
+
 # ── Stop ──────────────────────────────────────────────────────────────────────
 stop_servers() {
   echo "[jumpnet] Stopping services…"
