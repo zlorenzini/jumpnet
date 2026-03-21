@@ -11,9 +11,11 @@
  *   PORT           default 4080
  */
 import { Router }        from 'express';
-import { networkInterfaces, cpus, freemem, uptime, hostname } from 'node:os';
-import { execFile }      from 'node:child_process';
+import { networkInterfaces, cpus, freemem, uptime, hostname, arch } from 'node:os';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify }     from 'node:util';
+import { existsSync }    from 'node:fs';
+import { join }          from 'node:path';
 import { PORT }          from '../server.js';
 
 export const router = Router();
@@ -80,11 +82,32 @@ async function probeGpu() {
   }
 }
 
+// ── dxcom detection (same logic as compile.js) ──────────────────────────────
+
+function findDxcom() {
+  try {
+    const p = execFileSync('which', ['dxcom'], { encoding: 'utf8' }).trim();
+    if (p) return p;
+  } catch { /* not in PATH */ }
+  const candidates = [
+    join(process.env.HOME || '/root', 'dx-compiler', 'venv-dx-compiler-local', 'bin', 'dxcom'),
+    join(process.env.HOME || '/root', '.local', 'share', 'dx-compiler', 'venv-dx-compiler-local', 'bin', 'dxcom'),
+    '/jump/dx-compiler/venv-dx-compiler-local/bin/dxcom',
+    '/opt/dx-compiler/venv-dx-compiler-local/bin/dxcom',
+    '/usr/local/bin/dxcom',
+  ];
+  return candidates.find(c => existsSync(c)) ?? null;
+}
+
 // ── Route ─────────────────────────────────────────────────────────────────────
 
 router.get('/', async (_req, res, next) => {
   try {
     const [load, gpu] = await Promise.all([cpuLoad(), probeGpu()]);
+
+    // Build services list — advertise dx_compile if dxcom is installed and host is x86_64
+    const services = ['infer', 'train'];
+    if (arch() === 'x64' && findDxcom() !== null) services.push('dx_compile');
 
     res.json({
       device:  process.env.DEVICE_ID ?? 'jumpnet',
@@ -99,6 +122,7 @@ router.get('/', async (_req, res, next) => {
         gpuUtil:       gpu.utilization   ?? undefined,
         memoryFreeMB:  Math.floor(freemem() / (1024 * 1024)),
         uptimeSeconds: Math.floor(uptime()),
+        services,
       },
       network: {
         ip:       localIp(),
