@@ -223,6 +223,67 @@ Stop a running imprint job.
 
 ---
 
+---
+
+## `GET /compile`
+
+Check whether DNNX compilation is supported on this host.
+
+**Response 200**
+```json
+{
+  "supported":   true,
+  "arch":        "x64",
+  "dxcomFound":  false,
+  "dxcomPath":   null,
+  "installDocs": "https://github.com/DEEPX-AI/dx-compiler"
+}
+```
+
+---
+
+## `POST /compile`
+
+Convert the trained `model.onnx` to DEEPX NPU format (`.dxnn`) using the
+[DEEPX dx-compiler](https://github.com/DEEPX-AI/dx-compiler) (`dxcom` CLI).
+
+**x86_64 hosts only.** Returns `501` on any other architecture.
+Requires `dxcom` to be installed; returns `503` if not found.
+
+**Request body** (all fields optional)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `modelDir` | string | `models/current` | Directory containing `model.onnx` and `metadata.json` |
+| `calibrationDataset` | string | auto-detected from `data/datasets` | Path to a folder of calibration images |
+| `calibrationNum` | number | `100` | Number of calibration samples (max 1000) |
+| `optLevel` | `0` or `1` | `1` | `0` = fast compile; `1` = full optimisation (lower NPU latency) |
+| `aggressivePartitioning` | boolean | `false` | Maximise operations on NPU (helpful on CPU-limited edge devices) |
+| `genLog` | boolean | `false` | Save `compiler.log` to the output directory |
+
+**Response 200**
+```json
+{
+  "ok":        true,
+  "dnnxPath":  "/abs/path/to/models/current/dnnx/model.dxnn",
+  "outputDir": "/abs/path/to/models/current/dnnx",
+  "sizeBytes": 3145728,
+  "elapsedMs": 45000,
+  "log":       "..."
+}
+```
+
+**Error responses specific to this endpoint**
+
+| Status | Meaning |
+|--------|---------|
+| 400 | No calibration dataset found — capture images first or provide `calibrationDataset` |
+| 404 | `model.onnx` or `metadata.json` not found in the model directory |
+| 501 | Host architecture is not x86_64 |
+| 503 | `dxcom` binary not installed |
+
+---
+
 ## Error responses
 
 All errors return JSON:

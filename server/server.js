@@ -11,6 +11,7 @@ import { router as statusRouter       } from './routes/status.js';
 import { router as capabilitiesRouter } from './routes/capabilities.js';
 import { router as devicesRouter      } from './routes/devices.js';
 import { router as captureRouter      } from './routes/capture.js';
+import { router as compileRouter      } from './routes/compile.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 export const UPSTREAM = process.env.JUMPSMARTS_URL ?? 'http://localhost:7312';
@@ -44,6 +45,7 @@ app.use('/status',       statusRouter);
 app.use('/capabilities', capabilitiesRouter);
 app.use('/devices',      devicesRouter);
 app.use('/capture',      captureRouter);
+app.use('/compile',      compileRouter);
 
 // 404 catch-all
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
