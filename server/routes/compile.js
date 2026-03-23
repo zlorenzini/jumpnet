@@ -43,6 +43,7 @@ function dxcomPython() {
   if (process.env.DXCOM_PYTHON) return process.env.DXCOM_PYTHON;
   const candidates = [
     join(process.env.HOME || '/root', 'dx-compiler', 'venv-dx-compiler-local', 'bin', 'python3'),
+    '/jump/dx-compiler/venv-dx-compiler-local/bin/python3',
     '/opt/dx-compiler/venv-dx-compiler-local/bin/python3',
     '/opt/dx-compiler/venv-dx-compiler/bin/python3',
   ];
