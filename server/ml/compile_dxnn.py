@@ -54,7 +54,7 @@ def _build_dataloader(input_shape: list, calibration_num: int):
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Usage: compile_dxnn.py <args_json_path>"}))
-        sys.exit(1)
+        sys.exit(0)
 
     args_path = sys.argv[1]
     with open(args_path) as f:
@@ -72,7 +72,7 @@ def main():
         import dx_com
     except ImportError as e:
         print(json.dumps({"error": f"dx_com not importable: {e}"}))
-        sys.exit(1)
+        sys.exit(0)
 
     try:
         # Auto-detect input shape if not provided
@@ -96,13 +96,13 @@ def main():
         dxnn_files = list(Path(output_dir).glob("*.dxnn"))
         if not dxnn_files:
             print(json.dumps({"error": "dx_com completed but no .dxnn found in output_dir"}))
-            sys.exit(1)
+            sys.exit(0)
 
         print(json.dumps({"dxnn_path": str(dxnn_files[0])}))
 
     except Exception as exc:
         print(json.dumps({"error": str(exc)}))
-        sys.exit(1)
+        sys.exit(0)
 
 
 if __name__ == "__main__":

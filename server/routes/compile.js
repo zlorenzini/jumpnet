@@ -267,10 +267,21 @@ router.post('/dxnn', _multerUpload.single('model'), async (req, res, next) => {
     const startMs = Date.now();
     console.log(`[compile/dxnn] Compiling "${modelName}.onnx" (${req.file.size} bytes) …`);
 
-    const { stdout, stderr } = await execFileAsync(
-      py, [COMPILE_SCRIPT, tmpArgs],
-      { timeout: 35 * 60 * 1000 },   // 35 min
-    );
+    let stdout, stderr;
+    try {
+      ({ stdout, stderr } = await execFileAsync(
+        py, [COMPILE_SCRIPT, tmpArgs],
+        { timeout: 35 * 60 * 1000 },   // 35 min
+      ));
+    } catch (execErr) {
+      // Non-zero exit: parse stdout for the JSON error message from the script
+      stdout = execErr.stdout ?? '';
+      stderr = execErr.stderr ?? '';
+      if (stderr) process.stderr.write(`[compile/dxnn] ${stderr}\n`);
+      let errMsg = execErr.message;
+      try { errMsg = JSON.parse(stdout.trim()).error ?? errMsg; } catch {}
+      return res.status(500).json({ error: errMsg });
+    }
 
     if (stderr) process.stderr.write(`[compile/dxnn] ${stderr}\n`);
 
