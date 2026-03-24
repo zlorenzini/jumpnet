@@ -272,7 +272,7 @@ router.post('/dxnn', _multerUpload.single('model'), async (req, res, next) => {
     try {
       ({ stdout, stderr } = await execFileAsync(
         py, [COMPILE_SCRIPT, tmpArgs],
-        { timeout: 35 * 60 * 1000 },   // 35 min
+        { timeout: 90 * 60 * 1000 },   // 90 min
       ));
     } catch (execErr) {
       // Non-zero exit: parse stdout for the JSON error message from the script
