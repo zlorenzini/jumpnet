@@ -65,6 +65,8 @@ def main():
     model_name      = args.get("model_name", "model")
     calibration_num = int(args.get("calibration_num", 20))
     input_shape     = args.get("input_shape")   # may be None → auto-detect
+    opt_level       = int(args.get("opt_level", 1))
+    aggressive      = bool(args.get("aggressive_partitioning", True))
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -87,8 +89,8 @@ def main():
             dataloader=dataloader,
             calibration_method="ema",
             calibration_num=calibration_num,
-            opt_level=1,
-            aggressive_partitioning=True,   # maximise NPU ops; good for edge
+            opt_level=opt_level,
+            aggressive_partitioning=aggressive,
             gen_log=True,
         )
 

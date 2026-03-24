@@ -251,13 +251,18 @@ router.post('/dxnn', _multerUpload.single('model'), async (req, res, next) => {
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(tmpOnnx, req.file.buffer);
 
+    const optLevel  = req.body?.optLevel  !== undefined ? Number(req.body.optLevel)  : 1;
+    const aggressive = req.body?.aggressive !== undefined ? Boolean(JSON.parse(req.body.aggressive)) : true;
+
     const args = JSON.stringify({
-      onnx_path:       tmpOnnx,
-      output_dir:      outputDir,
-      model_name:      modelName,
-      calibration_num: Number(calibrationNum ?? 20),
-      input_shape:     inputShape ?? null,
-      input_name:      inputName  ?? 'input_values',
+      onnx_path:               tmpOnnx,
+      output_dir:              outputDir,
+      model_name:              modelName,
+      calibration_num:         Number(calibrationNum ?? 20),
+      input_shape:             inputShape ?? null,
+      input_name:              inputName  ?? 'input_values',
+      opt_level:               optLevel,
+      aggressive_partitioning: aggressive,
     });
 
     // Write args to a temp file
