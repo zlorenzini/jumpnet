@@ -286,7 +286,10 @@ router.post('/dxnn', _multerUpload.single('model'), async (req, res, next) => {
 
     if (stderr) process.stderr.write(`[compile/dxnn] ${stderr}\n`);
 
-    const result = JSON.parse(stdout.trim());
+    // dx_com may emit [INFO] log lines to stdout before the JSON result — find the last JSON line
+    const jsonLine = stdout.trim().split('\n').reverse().find(l => { try { JSON.parse(l); return true; } catch { return false; } });
+    if (!jsonLine) return res.status(500).json({ error: `No JSON in compile output: ${stdout.slice(0, 200)}` });
+    const result = JSON.parse(jsonLine);
     if (result.error) return res.status(500).json({ error: result.error });
 
     const elapsedMs = Date.now() - startMs;
